@@ -9,9 +9,9 @@ import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 import base64
-import json
+import simplekml
 
-st.title("🗺️ Aplikasi Analisis Lokasi Foto")
+st.title("📸 Aplikasi Analisis Lokasi Foto Kronologis")
 
 # Konversi HEIC ke JPEG
 def convert_heic_to_jpeg(image_bytes):
@@ -76,6 +76,7 @@ uploaded_files = st.file_uploader(
 coordinates = []
 thumbnails = []
 valid_images = []
+valid_data = []
 
 for uploaded_file in uploaded_files:
     bytes_data = uploaded_file.getvalue()
@@ -90,43 +91,58 @@ for uploaded_file in uploaded_files:
         img = Image.open(io.BytesIO(converted_bytes))
         img.thumbnail((150, 150))
         thumbnails.append(img)
+        
+        # Simpan data untuk Excel
+        valid_data.append({
+            "Nama File": uploaded_file.name,
+            "Latitude": coords[0],
+            "Longitude": coords[1]
+        })
     else:
         st.warning(f"Foto {uploaded_file.name} tidak memiliki data GPS")
 
 # Tampilkan hasil
 if coordinates:
-    # Hitung jarak semua pasang
-    num_images = len(coordinates)
-    distance_matrix = [[0.0 for _ in range(num_images)] for _ in range(num_images)]
-    
-    for i in range(num_images):
-        for j in range(num_images):
-            if i != j:
-                distance = haversine(coordinates[i], coordinates[j]) * 1000  # Konversi ke meter
-                distance_matrix[i][j] = round(distance, 2)
-    
-    # Tampilkan tabel jarak
-    st.subheader("📊 Matriks Jarak (Meter)")
-    df = pd.DataFrame(
-        distance_matrix,
-        index=valid_images,
-        columns=valid_images
-    )
-    st.dataframe(df.style.format("{:.2f}"))
+    # Tetapkan titik pertama sebagai referensi (titik nol)
+    reference_point = coordinates[0]
+
+    # Hitung jarak dari titik referensi ke semua titik lainnya
+    distances = []
+    for coord, filename in zip(coordinates, valid_images):
+        distance = haversine(reference_point, coord) * 1000  # Dalam meter
+        distances.append({
+            "Nama File": filename,
+            "Latitude": coord[0],
+            "Longitude": coord[1],
+            "Jarak (Meter)": round(distance, 2)
+        })
+
+    # Urutkan data berdasarkan jarak dari terdekat ke terjauh
+    sorted_distances = sorted(distances, key=lambda x: x["Jarak (Meter)"])
+
+    # Tampilkan tabel hasil
+    st.subheader("📊 Data Foto Berdasarkan Jarak dari Titik Nol")
+    df_sorted = pd.DataFrame(sorted_distances)
+    st.dataframe(df_sorted.style.format({"Jarak (Meter)": "{:.2f}"}))
 
     # Tampilkan thumbnail
-    st.subheader("📸 Thumbnail Foto")
+    st.subheader("📸 Thumbnail Foto (Urutan Jarak)")
     cols = st.columns(4)
-    for idx, (thumbnail, filename) in enumerate(zip(thumbnails, valid_images)):
+    for idx, row in enumerate(sorted_distances):
         with cols[idx % 4]:
-            st.image(thumbnail, caption=filename, use_column_width=True)
+            thumbnail = thumbnails[valid_images.index(row["Nama File"])]
+            st.image(thumbnail, caption=row["Nama File"], use_column_width=True)
 
-    # Buat peta
-    m = folium.Map(location=coordinates[0], zoom_start=14)
+    # Buat peta dengan marker diurutkan berdasarkan jarak
+    m = folium.Map(location=reference_point, zoom_start=14)
     marker_cluster = MarkerCluster().add_to(m)
     
-    for coord, filename, thumbnail in zip(coordinates, valid_images, thumbnails):
+    for row in sorted_distances:
+        coord = (row["Latitude"], row["Longitude"])
+        filename = row["Nama File"]
+        
         # Konversi gambar ke base64 untuk popup
+        thumbnail = thumbnails[valid_images.index(filename)]
         img_byte = io.BytesIO()
         thumbnail.save(img_byte, format='PNG')
         encoded = base64.b64encode(img_byte.getvalue()).decode()
@@ -139,34 +155,40 @@ if coordinates:
         ).add_to(marker_cluster)
 
     # Tampilkan peta
-    st.subheader("📍 Peta Lokasi")
+    st.subheader("📍 Peta Lokasi (Urutan Jarak)")
     st_folium(m, width=700, height=500)
 
-    # Download GeoJSON
-    features = []
-    for coord, filename in zip(coordinates, valid_images):
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "name": filename,
-                "popupContent": f"<strong>{filename}</strong><br>Lat: {coord[0]:.6f}<br>Lon: {coord[1]:.6f}"
-            },
-            "geometry": {
-                "type": "Point",
-                "coordinates": [coord[1], coord[0]]
-            }
-        })
-
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-
+    # Download Excel
+    df_excel = pd.DataFrame(sorted_distances)
+    excel_file = io.BytesIO()
+    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+        df_excel.to_excel(writer, index=False)
+    excel_file.seek(0)
+    
     st.download_button(
-        label="📥 Download GeoJSON",
-        data=json.dumps(geojson, indent=2),
-        file_name="foto_lokasi.geojson",
-        mime="application/json"
+        label="📥 Download Excel",
+        data=excel_file,
+        file_name="data_foto.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+    # Download KML
+    kml = simplekml.Kml()
+    for row in sorted_distances:
+        coord = (row["Latitude"], row["Longitude"])
+        filename = row["Nama File"]
+        kml.newpoint(
+            name=filename,
+            coords=[(coord[1], coord[0])]
+        )
+    kml_file = kml.kml().encode('utf-8')
+    
+    st.download_button(
+        label="📥 Download KML",
+        data=kml_file,
+        file_name="lokasi_foto.kml",
+        mime="application/vnd.google-earth.kml+xml"
+    )
+
 else:
     st.info("Silakan upload foto dengan data GPS")
