@@ -96,11 +96,20 @@ uploaded_files = st.file_uploader(
 
 # Urutkan file berdasarkan waktu pembuatan/modifikasi
 if uploaded_files:
-    sorted_files = sorted(
-        uploaded_files,
-        key=lambda x: datetime.strptime(x.name.split('.')[0], "%Y%m%d_%H%M%S") if '_' in x.name else os.path.getctime(x.name),
-        reverse=False  # Urutkan dari yang paling awal ke yang paling akhir
-    )
+    def get_file_timestamp(file):
+        try:
+            # Coba ekstrak timestamp dari nama file (format YYYYMMDD_HHMMSS)
+            if '_' in file.name:
+                timestamp_str = file.name.split('.')[0]
+                return datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+        except ValueError:
+            pass
+        
+        # Fallback ke waktu upload (Streamlit UploadedFile tidak memiliki path fisik)
+        return datetime.now()
+
+    # Urutkan file berdasarkan timestamp
+    sorted_files = sorted(uploaded_files, key=get_file_timestamp, reverse=False)
 else:
     sorted_files = []
 
