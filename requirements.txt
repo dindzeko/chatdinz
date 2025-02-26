@@ -1,10 +1,10 @@
 streamlit
 exif
 haversine
-Pillow
+pillow
 pillow-heif
+pandas
 folium
 streamlit-folium
-pandas
-openpyxl
+requests
 simplekml
