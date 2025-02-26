@@ -10,6 +10,8 @@ from streamlit_folium import st_folium
 import base64
 import simplekml
 import requests
+import os
+from datetime import datetime
 
 # Judul aplikasi
 st.title("📸 Aplikasi Analisis Lokasi Foto Kronologis dengan Rute Aktual")
@@ -92,13 +94,23 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+# Urutkan file berdasarkan waktu pembuatan/modifikasi
+if uploaded_files:
+    sorted_files = sorted(
+        uploaded_files,
+        key=lambda x: datetime.strptime(x.name.split('.')[0], "%Y%m%d_%H%M%S") if '_' in x.name else os.path.getctime(x.name),
+        reverse=False  # Urutkan dari yang paling awal ke yang paling akhir
+    )
+else:
+    sorted_files = []
+
 # Proses gambar
 coordinates = []
 thumbnails = []
 valid_images = []
 valid_data = []
 
-for uploaded_file in uploaded_files:
+for uploaded_file in sorted_files:
     bytes_data = uploaded_file.getvalue()
     coords, converted_bytes = extract_coordinates(bytes_data)
     
