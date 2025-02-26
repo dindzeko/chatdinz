@@ -3,7 +3,6 @@ exif
 haversine
 Pillow
 pillow-heif
-exif
-haversine
-Pillow
-pillow-heif
+folium
+streamlit-folium
+pandas
