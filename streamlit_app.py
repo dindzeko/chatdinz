@@ -2,11 +2,33 @@ import streamlit as st
 from exif import Image as ExifImage
 from haversine import haversine
 import io
+from PIL import Image
+import pillow_heif  # Tambahkan ini untuk dukungan HEIC
 
 st.title("🛰️ Aplikasi Hitung Jarak dari Foto")
 st.write("Upload dua gambar berisi informasi GPS untuk menghitung jarak")
 
+def convert_heic_to_jpeg(image_bytes):
+    heif_file = pillow_heif.read_heif(image_bytes)
+    image = Image.frombytes(
+        heif_file.mode,
+        heif_file.size,
+        heif_file.data,
+        "raw"
+    )
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG')
+    return img_byte_arr.getvalue()
+
 def extract_coordinates(image_bytes):
+    # Coba konversi HEIC ke JPEG jika diperlukan
+    if image_bytes.startswith(b"ftypheic") or image_bytes.startswith(b"ftypmif1"):
+        try:
+            image_bytes = convert_heic_to_jpeg(image_bytes)
+        except Exception as e:
+            st.error(f"Gagal mengkonversi HEIC: {str(e)}")
+            return None
+
     try:
         img = ExifImage(image_bytes)
     except Exception as e:
@@ -38,7 +60,7 @@ def extract_coordinates(image_bytes):
     return (lat_decimal, lon_decimal)
 
 # Upload gambar pertama
-img1 = st.file_uploader("Upload Gambar 1", type=['jpg', 'jpeg'])
+img1 = st.file_uploader("Upload Gambar 1", type=['jpg', 'jpeg', 'heic'])
 coord1 = None
 if img1:
     bytes_data = img1.getvalue()
@@ -49,7 +71,7 @@ if img1:
         st.success(f"**Koordinat 1:** {coord1[0]:.6f}°N, {coord1[1]:.6f}°E")
 
 # Upload gambar kedua
-img2 = st.file_uploader("Upload Gambar 2", type=['jpg', 'jpeg'])
+img2 = st.file_uploader("Upload Gambar 2", type=['jpg', 'jpeg', 'heic'])
 coord2 = None
 if img2:
     bytes_data = img2.getvalue()
