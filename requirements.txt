@@ -1,3 +1,9 @@
 streamlit
 exif
 haversine
+Pillow
+pillow-heif
+exif
+haversine
+Pillow
+pillow-heif
