@@ -101,10 +101,21 @@ if uploaded_files:
             return numeric_part
         except ValueError:
             # Jika nama file tidak memiliki angka, kembalikan nilai besar sebagai fallback
+            st.warning(f"Nama file '{file.name}' tidak mengandung angka. File ini akan ditempatkan di akhir daftar.")
             return float('inf')
+
+    # Debug: Tampilkan nama file yang diupload
+    st.write("Nama file yang diupload:")
+    for file in uploaded_files:
+        st.write(file.name)
 
     # Urutkan file berdasarkan nama numerik
     sorted_files = sorted(uploaded_files, key=get_numeric_name, reverse=False)
+    
+    # Debug: Tampilkan urutan file setelah diurutkan
+    st.write("Urutan file setelah diurutkan:")
+    for file in sorted_files:
+        st.write(file.name)
 else:
     sorted_files = []
 
@@ -157,23 +168,23 @@ if coordinates:
         else:
             st.warning(f"Gagal menghitung rute untuk foto {filename}.")
     
-    # Urutkan data berdasarkan jarak dari terdekat ke terjauh
-    sorted_distances = sorted(distances, key=lambda x: x["Jarak (Meter)"])
-    
+    # Urutkan data berdasarkan nama file numerik
+    sorted_distances = sorted(distances, key=lambda x: int(x["Nama File"].split('.')[0]))
+
     # Tampilkan tabel hasil
-    st.subheader("📊 Data Foto Berdasarkan Jarak Rute dari Titik Nol")
+    st.subheader("📊 Data Foto Berdasarkan Nama File (Urutan Numerik)")
     df_sorted = pd.DataFrame(sorted_distances)
     st.dataframe(df_sorted.style.format({"Jarak (Meter)": "{:.2f}", "Durasi (Detik)": "{:.2f}"}))
     
     # Tampilkan thumbnail
-    st.subheader("📸 Thumbnail Foto (Urutan Jarak)")
+    st.subheader("📸 Thumbnail Foto (Urutan Nama File)")
     cols = st.columns(4)
     for idx, row in enumerate(sorted_distances):
         with cols[idx % 4]:
             thumbnail = thumbnails[valid_images.index(row["Nama File"])]
             st.image(thumbnail, caption=row["Nama File"], use_column_width=True)
     
-    # Buat peta dengan marker diurutkan berdasarkan jarak
+    # Buat peta dengan marker diurutkan berdasarkan nama file
     m = folium.Map(location=reference_point, zoom_start=14)
     marker_cluster = MarkerCluster().add_to(m)
     
@@ -195,7 +206,7 @@ if coordinates:
         ).add_to(marker_cluster)
     
     # Tampilkan peta
-    st.subheader("📍 Peta Lokasi (Urutan Jarak)")
+    st.subheader("📍 Peta Lokasi (Urutan Nama File)")
     st_folium(m, width=700, height=500)
     
     # Download Excel
