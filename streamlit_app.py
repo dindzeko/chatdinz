@@ -1,6 +1,5 @@
 import streamlit as st
 from exif import Image as ExifImage
-from haversine import haversine
 import io
 from PIL import Image
 import pillow_heif
@@ -10,8 +9,10 @@ from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 import base64
 import simplekml
+import requests
 
-st.title("📸 Aplikasi Analisis Lokasi Foto Kronologis")
+# Judul aplikasi
+st.title("📸 Aplikasi Analisis Lokasi Foto Kronologis dengan Rute Aktual")
 
 # Konversi HEIC ke JPEG
 def convert_heic_to_jpeg(image_bytes):
@@ -30,40 +31,59 @@ def convert_heic_to_jpeg(image_bytes):
         st.error(f"Gagal konversi HEIC: {str(e)}")
         return None
 
-# Ekstrak koordinat
+# Ekstrak koordinat GPS dari gambar
 def extract_coordinates(image_bytes):
     try:
         Image.open(io.BytesIO(image_bytes)).verify()
     except:
         return None, None
-
     if image_bytes.startswith(b"ftypheic"):
         image_bytes = convert_heic_to_jpeg(image_bytes)
         if not image_bytes:
             return None, None
-
     try:
         img = ExifImage(image_bytes)
     except:
         return None, None
-
     if not hasattr(img, 'gps_latitude'):
         return None, None
-
     lat = img.gps_latitude
     lon = img.gps_longitude
     lat_ref = img.gps_latitude_ref
     lon_ref = img.gps_longitude_ref
-
     lat_decimal = lat[0] + lat[1]/60 + lat[2]/3600
     if lat_ref != 'N':
         lat_decimal = -lat_decimal
-
     lon_decimal = lon[0] + lon[1]/60 + lon[2]/3600
     if lon_ref != 'E':
         lon_decimal = -lon_decimal
-
     return (lat_decimal, lon_decimal), image_bytes
+
+# Hitung jarak dan durasi menggunakan OSRM Public Demo Server
+def calculate_osrm_route(origin, destination):
+    try:
+        # Format koordinat untuk OSRM (longitude,latitude)
+        coords = f"{origin[1]},{origin[0]};{destination[1]},{destination[0]}"
+        url = f"http://router.project-osrm.org/route/v1/driving/{coords}"
+        
+        # Kirim permintaan ke OSRM API
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            if data['code'] == 'Ok':
+                # Ambil jarak (dalam meter) dan durasi (dalam detik)
+                distance = data['routes'][0]['distance']  # Jarak dalam meter
+                duration = data['routes'][0]['duration']  # Durasi dalam detik
+                return distance, duration
+            else:
+                st.error("Gagal mendapatkan rute. Pastikan koordinat valid.")
+                return None, None
+        else:
+            st.error(f"Error: {response.status_code}")
+            return None, None
+    except Exception as e:
+        st.error(f"Terjadi kesalahan: {str(e)}")
+        return None, None
 
 # Upload multiple gambar
 uploaded_files = st.file_uploader(
@@ -105,26 +125,30 @@ for uploaded_file in uploaded_files:
 if coordinates:
     # Tetapkan titik pertama sebagai referensi (titik nol)
     reference_point = coordinates[0]
-
-    # Hitung jarak dari titik referensi ke semua titik lainnya
+    
+    # Hitung jarak rute aktual menggunakan OSRM
     distances = []
     for coord, filename in zip(coordinates, valid_images):
-        distance = haversine(reference_point, coord) * 1000  # Dalam meter
-        distances.append({
-            "Nama File": filename,
-            "Latitude": coord[0],
-            "Longitude": coord[1],
-            "Jarak (Meter)": round(distance, 2)
-        })
-
+        distance, duration = calculate_osrm_route(reference_point, coord)
+        if distance is not None and duration is not None:
+            distances.append({
+                "Nama File": filename,
+                "Latitude": coord[0],
+                "Longitude": coord[1],
+                "Jarak (Meter)": round(distance, 2),
+                "Durasi (Detik)": round(duration, 2)
+            })
+        else:
+            st.warning(f"Gagal menghitung rute untuk foto {filename}.")
+    
     # Urutkan data berdasarkan jarak dari terdekat ke terjauh
     sorted_distances = sorted(distances, key=lambda x: x["Jarak (Meter)"])
-
+    
     # Tampilkan tabel hasil
-    st.subheader("📊 Data Foto Berdasarkan Jarak dari Titik Nol")
+    st.subheader("📊 Data Foto Berdasarkan Jarak Rute dari Titik Nol")
     df_sorted = pd.DataFrame(sorted_distances)
-    st.dataframe(df_sorted.style.format({"Jarak (Meter)": "{:.2f}"}))
-
+    st.dataframe(df_sorted.style.format({"Jarak (Meter)": "{:.2f}", "Durasi (Detik)": "{:.2f}"}))
+    
     # Tampilkan thumbnail
     st.subheader("📸 Thumbnail Foto (Urutan Jarak)")
     cols = st.columns(4)
@@ -132,7 +156,7 @@ if coordinates:
         with cols[idx % 4]:
             thumbnail = thumbnails[valid_images.index(row["Nama File"])]
             st.image(thumbnail, caption=row["Nama File"], use_column_width=True)
-
+    
     # Buat peta dengan marker diurutkan berdasarkan jarak
     m = folium.Map(location=reference_point, zoom_start=14)
     marker_cluster = MarkerCluster().add_to(m)
@@ -153,11 +177,11 @@ if coordinates:
             popup=html,
             tooltip=filename
         ).add_to(marker_cluster)
-
+    
     # Tampilkan peta
     st.subheader("📍 Peta Lokasi (Urutan Jarak)")
     st_folium(m, width=700, height=500)
-
+    
     # Download Excel
     df_excel = pd.DataFrame(sorted_distances)
     excel_file = io.BytesIO()
@@ -171,7 +195,7 @@ if coordinates:
         file_name="data_foto.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
+    
     # Download KML
     kml = simplekml.Kml()
     for row in sorted_distances:
@@ -189,6 +213,5 @@ if coordinates:
         file_name="lokasi_foto.kml",
         mime="application/vnd.google-earth.kml+xml"
     )
-
 else:
     st.info("Silakan upload foto dengan data GPS")
