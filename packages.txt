@@ -1,2 +1,2 @@
 libexif-dev
-libheif-dev  # Tambahkan untuk dukungan HEIC
+libheif-dev
