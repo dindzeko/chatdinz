@@ -10,8 +10,6 @@ from streamlit_folium import st_folium
 import base64
 import simplekml
 import requests
-import os
-from datetime import datetime
 
 # Judul aplikasi
 st.title("📸 Aplikasi Analisis Lokasi Foto Kronologis dengan Rute Aktual")
@@ -94,22 +92,19 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# Urutkan file berdasarkan waktu pembuatan/modifikasi
+# Urutkan file berdasarkan nama numerik
 if uploaded_files:
-    def get_file_timestamp(file):
+    def get_numeric_name(file):
         try:
-            # Coba ekstrak timestamp dari nama file (format YYYYMMDD_HHMMSS)
-            if '_' in file.name:
-                timestamp_str = file.name.split('.')[0]
-                return datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+            # Ambil bagian numerik dari nama file
+            numeric_part = int(file.name.split('.')[0])  # Ambil angka sebelum ekstensi
+            return numeric_part
         except ValueError:
-            pass
-        
-        # Fallback ke waktu upload (Streamlit UploadedFile tidak memiliki path fisik)
-        return datetime.now()
+            # Jika nama file tidak memiliki angka, kembalikan nilai besar sebagai fallback
+            return float('inf')
 
-    # Urutkan file berdasarkan timestamp
-    sorted_files = sorted(uploaded_files, key=get_file_timestamp, reverse=False)
+    # Urutkan file berdasarkan nama numerik
+    sorted_files = sorted(uploaded_files, key=get_numeric_name, reverse=False)
 else:
     sorted_files = []
 
