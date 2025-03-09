@@ -19,8 +19,11 @@ def init_supabase():
 
 @st.cache_resource
 def init_gemini():
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel('gemini-pro')
+    genai.configure(
+        api_key=st.secrets["GEMINI_API_KEY"],
+        client_options={"api_endpoint": "generativelanguage.googleapis.com/v1beta"}
+    )
+    return genai.GenerativeModel('gemini-2.0-flash')
 
 supabase = init_supabase()
 gemini_model = init_gemini()
@@ -41,7 +44,6 @@ def process_pdf(file):
 # Penyimpanan ke Supabase
 def store_in_supabase(chunks, filename):
     try:
-        # Pastikan menggunakan parameter 'metadatas' (bentuk jamak)
         SupabaseVectorStore.from_texts(
             texts=chunks,
             embedding=EMBEDDINGS,
