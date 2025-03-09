@@ -41,17 +41,18 @@ def process_pdf(file):
 # Penyimpanan ke Supabase
 def store_in_supabase(chunks, filename):
     try:
+        # Pastikan menggunakan parameter 'metadatas' (bentuk jamak)
         SupabaseVectorStore.from_texts(
             texts=chunks,
             embedding=EMBEDDINGS,
             client=supabase,
             table_name="documents",
-            metadatas=[{"filename": filename} for _ in chunks]  # Parameter diperbaiki
+            metadatas=[{"filename": filename} for _ in chunks]
         )
         return True
     except Exception as e:
-        st.error(f"Gagal menyimpan ke Supabase: {str(e)}")
-        st.error(traceback.format_exc())  # Tampilkan detail error
+        st.error(f"Error penyimpanan: {str(e)}")
+        st.error(traceback.format_exc())
         return False
 
 # Pencarian di Supabase
