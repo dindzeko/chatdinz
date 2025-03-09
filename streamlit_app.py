@@ -3,18 +3,18 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 from supabase import create_client
 from typing import List
-import os
+import numpy as np
 
-# Konfigurasi Supabase dari secrets
+# Konfigurasi Supabase
 sb_url = st.secrets["supabase"]["url"]
 sb_key = st.secrets["supabase"]["key"]
 supabase = create_client(sb_url, sb_key)
 
-# Model embedding
+# Model embedding (384 dimensi)
 EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Fungsi ekstrak teks dari PDF
 def extract_text_from_pdf(file_bytes) -> str:
+    """Ekstrak teks dari file PDF"""
     try:
         reader = PdfReader(file_bytes)
         return "\n".join(page.extract_text() for page in reader.pages)
@@ -22,8 +22,8 @@ def extract_text_from_pdf(file_bytes) -> str:
         st.error(f"Gagal membaca PDF: {str(e)}")
         return None
 
-# Fungsi split teks dengan sliding window
 def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+    """Pecah teks dengan sliding window"""
     chunks = []
     start = 0
     while start < len(text):
@@ -32,28 +32,44 @@ def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 100)
         start += (chunk_size - overlap)
     return chunks
 
-# Fungsi generate embedding
 def generate_embeddings(text_chunks: List[str]) -> List[List[float]]:
-    return EMBEDDING_MODEL.encode(text_chunks).tolist()
+    """Buat embedding dengan validasi dimensi"""
+    embeddings = EMBEDDING_MODEL.encode(text_chunks).tolist()
+    if len(embeddings) == 0:
+        raise ValueError("Tidak ada embedding yang dihasilkan")
+    if len(embeddings[0]) != 384:
+        raise ValueError(f"Dimensi embedding tidak valid: {len(embeddings[0])}")
+    return embeddings
 
-# Fungsi simpan ke Supabase
 def store_embeddings(filename: str, chunks: List[str], embeddings: List[List[float]]):
+    """Simpan ke Supabase dengan validasi"""
     try:
+        # Validasi panjang data
+        if len(chunks) != len(embeddings):
+            raise ValueError("Jumlah chunk dan embedding tidak sama")
+            
         data = [
             {
                 "filename": filename,
                 "content": chunk,
-                "embedding": embedding
+                "embedding": np.array(embedding, dtype=np.float32).tolist()  # Pastikan format numerik
             }
             for chunk, embedding in zip(chunks, embeddings)
         ]
+        
         response = supabase.table('pdf_embeddings').insert(data).execute()
+        
+        if hasattr(response, 'error') and response.error:
+            st.error(f"Error Supabase: {response.error.message}")
+            return None
+            
         return response.data
+        
     except Exception as e:
-        st.error(f"Gagal menyimpan ke Supabase: {str(e)}")
+        st.error(f"Gagal menyimpan: {str(e)}")
         return None
 
-# Antarmuka Streamlit
+# ===== Antarmuka Streamlit =====
 st.title("📄 PDF to Embedding Processor")
 st.subheader("Ekstrak teks, buat embedding, dan simpan ke Supabase")
 
@@ -62,29 +78,31 @@ chunk_size = st.slider("Ukuran Chunk (karakter)", 100, 1000, 500, 50)
 overlap = st.slider("Overlap (karakter)", 0, 500, 100, 25)
 
 if uploaded_file is not None:
-    # Tampilkan info file
-    st.write("File terpilih:")
-    st.write(f"**Nama**: {uploaded_file.name}")
-    st.write(f"**Ukuran**: {round(uploaded_file.size/1024)} KB")
+    st.write("**File terpilih:**")
+    st.write(f"Nama: `{uploaded_file.name}`")
+    st.write(f"Ukuran: {round(uploaded_file.size/1024)} KB")
     
     if st.button("Proses PDF", use_container_width=True):
         with st.spinner("Memproses..."):
             # 1. Ekstrak teks
             text = extract_text_from_pdf(uploaded_file)
             if not text:
-                st.error("Tidak dapat mengekstrak teks dari PDF")
+                st.error("Gagal mengekstrak teks dari PDF")
                 st.stop()
-            
+                
             # 2. Split teks
-            chunks = split_text_into_chunks(
-                text,
-                chunk_size=chunk_size,
-                overlap=overlap
-            )
-            
+            chunks = split_text_into_chunks(text, chunk_size, overlap)
+            if len(chunks) == 0:
+                st.error("Tidak ada chunk yang dihasilkan")
+                st.stop()
+                
             # 3. Generate embedding
-            embeddings = generate_embeddings(chunks)
-            
+            try:
+                embeddings = generate_embeddings(chunks)
+            except Exception as e:
+                st.error(f"Error embedding: {str(e)}")
+                st.stop()
+                
             # 4. Simpan ke Supabase
             result = store_embeddings(
                 filename=uploaded_file.name,
@@ -93,18 +111,20 @@ if uploaded_file is not None:
             )
             
             if result:
-                st.success(f"Berhasil menyimpan {len(chunks)} chunks!")
+                st.success(f"✅ {len(chunks)} chunks berhasil disimpan!")
                 st.balloons()
-                with st.expander("Lihat detail"):
-                    st.write(f"Total karakter: {len(text)}")
-                    st.write(f"Jumlah chunks: {len(chunks)}")
-                    st.write(f"Ukuran embedding: {len(embeddings[0])} dimensi")
+                with st.expander("Detail Teknis"):
+                    st.write(f"- Total karakter: {len(text)}")
+                    st.write(f"- Jumlah chunks: {len(chunks)}")
+                    st.write(f"- Dimensi embedding: {len(embeddings[0])}")
+                    st.write(f"- Tabel tujuan: `pdf_embeddings`")
 
-# Info teknis di sidebar
+# Informasi teknis di sidebar
 with st.sidebar:
-    st.info("Pastikan sudah membuat tabel di Supabase dengan perintah:")
+    st.warning("Pastikan sudah membuat tabel dengan:")
     st.code('''
     CREATE EXTENSION IF NOT EXISTS vector;
+    
     CREATE TABLE pdf_embeddings (
         id SERIAL PRIMARY KEY,
         filename TEXT NOT NULL,
@@ -113,3 +133,5 @@ with st.sidebar:
         created_at TIMESTAMP DEFAULT NOW()
     );
     ''')
+    
+    st.info("Policy RLS harus mengizinkan INSERT untuk role anon")
