@@ -3,142 +3,171 @@ from supabase import create_client
 from PyPDF2 import PdfReader
 import google.generativeai as genai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
-from langchain.embeddings import HuggingFaceEmbeddings
 import os
 import traceback
 
-# Konfigurasi Page Config harus di baris pertama setelah import
+# -------------------- Konfigurasi --------------------
+# Pastikan ini dijalankan pertama kali
 st.set_page_config(page_title="PDF Chatbot", layout="wide")
-
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDINGS = HuggingFaceEmbeddings(model_name=MODEL_NAME)
 
 # Inisialisasi koneksi
 @st.cache_resource
-def init_supabase():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-
-@st.cache_resource
-def init_gemini():
-    genai.configure(
-        api_key=st.secrets["GEMINI_API_KEY"],
-        client_options={"api_endpoint": "generativelanguage.googleapis.com/v1beta"}
+def init_services():
+    # Supabase
+    supabase = create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_KEY"]
     )
-    return genai.GenerativeModel('gemini-2.0-flash')
-
-supabase = init_supabase()
-gemini_model = init_gemini()
-
-# Fungsi pemrosesan PDF
-def process_pdf(file):
-    text = ""
-    pdf_reader = PdfReader(file)
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ""
     
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
+    # Google Gemini
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # Embedding
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001",
+        task_type="retrieval_document"
     )
-    return text_splitter.split_text(text)
+    
+    return supabase, gemini_model, embeddings
 
-# Penyimpanan ke Supabase
-def store_in_supabase(chunks, filename):
+supabase_client, gemini_model, embeddings = init_services()
+
+# -------------------- Fungsi Utama --------------------
+def process_and_store_pdf(pdf_file):
+    """Ekstrak teks dari PDF, lakukan chunking, dan simpan ke Supabase"""
     try:
+        # Ekstrak teks dari PDF
+        pdf_reader = PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() or ""
+        
+        # Chunking teks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
+        )
+        chunks = text_splitter.split_text(text)
+        
+        # Simpan ke Supabase
         SupabaseVectorStore.from_texts(
             texts=chunks,
-            embedding=EMBEDDINGS,
-            client=supabase,
-            table_name="documents",
-            metadatas=[{"filename": filename} for _ in chunks]
+            embedding=embeddings,
+            client=supabase_client,
+            table_name="pdf_embeddings",
+            query_name="match_documents",
+            metadatas=[{"source": pdf_file.name} for _ in chunks]
         )
-        return True
+        
+        return True, f"Berhasil memproses {pdf_file.name}"
+    
     except Exception as e:
-        st.error(f"Error penyimpanan: {str(e)}")
-        st.error(traceback.format_exc())
-        return False
+        return False, f"Error: {str(e)}\n{traceback.format_exc()}"
 
-# Pencarian di Supabase
-def search_supabase(query, threshold=0.7):
+def search_documents(query):
+    """Cari dokumen relevan dari Supabase"""
     try:
         vector_store = SupabaseVectorStore(
-            client=supabase,
-            embedding=EMBEDDINGS,
-            table_name="documents"
+            client=supabase_client,
+            embedding=embeddings,
+            table_name="pdf_embeddings",
+            query_name="match_documents"
         )
-        results = vector_store.similarity_search_with_score(query, k=1)
-        if results and results[0][1] >= threshold:
-            return results[0][0].page_content
-        return None
+        
+        # Cari 3 dokumen teratas dengan threshold 0.7
+        results = vector_store.similarity_search_with_score(
+            query,
+            k=3,
+            filter={"source": {"$eq": st.session_state.current_pdf}}
+        )
+        
+        # Filter berdasarkan threshold
+        filtered = [doc for doc, score in results if score >= 0.7]
+        return filtered
+    
     except Exception as e:
         st.error(f"Error pencarian: {str(e)}")
-        return None
-
-# Generate jawaban Gemini
-def generate_gemini_response(query):
-    try:
-        response = gemini_model.generate_content(query)
-        return response.text
-    except Exception as e:
-        return f"Error generating response: {str(e)}"
-
-# Tampilkan daftar PDF
-def show_pdf_list():
-    try:
-        query = supabase.table("documents").select("metadata->>filename").execute()
-        files = list({item['metadata']['filename'] for item in query.data})
-        return files
-    except Exception as e:
-        st.error(f"Error mengambil daftar PDF: {str(e)}")
         return []
 
-# Inisialisasi session state setelah page config
+def generate_response(query, context=None):
+    """Buat respons menggunakan Gemini"""
+    try:
+        if context:
+            prompt = f"""Context: {context}
+            Pertanyaan: {query}
+            
+            Berikan jawaban berdasarkan konteks di atas. Jika tidak ada informasi yang relevan, 
+            beri tahu pengguna bahwa Anda tidak tahu."""
+        else:
+            prompt = query
+        
+        response = gemini_model.generate_content(prompt)
+        return response.text
+    
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# -------------------- Aplikasi Streamlit --------------------
+# Inisialisasi session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "current_pdf" not in st.session_state:
+    st.session_state.current_pdf = None
 
-# Sidebar
+# Sidebar untuk upload PDF
 with st.sidebar:
     st.header("Pengaturan")
     uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
     
     if uploaded_file:
-        with st.spinner("Memproses PDF..."):
-            chunks = process_pdf(uploaded_file)
-            if store_in_supabase(chunks, uploaded_file.name):
-                st.success(f"File {uploaded_file.name} berhasil diproses!")
-            else:
-                st.error("Gagal memproses file")
-
-    if st.button("Tampilkan Daftar PDF"):
-        pdf_list = show_pdf_list()
-        if pdf_list:
-            st.subheader("Dokumen Tersedia:")
-            for pdf in pdf_list:
-                st.write(pdf)
+        success, message = process_and_store_pdf(uploaded_file)
+        if success:
+            st.session_state.current_pdf = uploaded_file.name
+            st.success(message)
         else:
-            st.write("Belum ada PDF yang diupload")
+            st.error(message)
 
-# Area Chat Utama
-st.title("PDF Chatbot 🤖")
+# Tampilan utama
+st.title("PDF Chatbot 📄🤖")
 
+# Tampilkan riwayat chat
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Input pengguna
 if prompt := st.chat_input("Apa pertanyaan Anda?"):
+    # Tambahkan pesan pengguna ke riwayat
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
+    # Proses pertanyaan
     with st.spinner("Mencari jawaban..."):
-        pdf_answer = search_supabase(prompt)
+        # Cari konteks dari Supabase
+        context_docs = search_documents(prompt)
+        context = "\n\n".join([doc.page_content for doc in context_docs]) if context_docs else None
         
-        if pdf_answer:
-            response = f"📄 Dari dokumen:\n\n{pdf_answer}"
+        # Generate respons
+        response = generate_response(prompt, context)
+        
+        # Tambahkan indikasi sumber
+        if context_docs:
+            source_note = f" (Sumber: {st.session_state.current_pdf})"
         else:
-            response = f"🌐 Dari Gemini:\n\n{generate_gemini_response(prompt)}"
+            source_note = " (Sumber: Pengetahuan Gemini)"
         
+        # Tampilkan respons
         with st.chat_message("assistant"):
             st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+            st.caption(f"Jawaban{source_note}")
+        
+        # Simpan ke riwayat
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response
+        })
