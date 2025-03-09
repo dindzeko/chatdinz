@@ -1,68 +1,89 @@
 import streamlit as st
-from supabase import create_client
-from PyPDF2 import PdfReader
+from supabase import create_client, Client
 import google.generativeai as genai
+from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
-import os
 import traceback
 
 # -------------------- Konfigurasi --------------------
 st.set_page_config(page_title="PDF Chatbot", layout="wide")
 
-# Cek ketersediaan environment variables
-required_envs = ["SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"]
-missing_envs = [env for env in required_envs if not st.secrets.get(env)]
+# Cek secrets dasar
+required_secrets = ["SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"]
+missing_secrets = [s for s in required_secrets if s not in st.secrets]
 
-if missing_envs:
-    st.error(f"Konfigurasi tidak lengkap: {', '.join(missing_envs)} belum diset")
+if missing_secrets:
+    st.error(f"Konfigurasi tidak lengkap: {', '.join(missing_secrets)} belum diset")
     st.stop()
 
 # -------------------- Inisialisasi Layanan --------------------
-def initialize_supabase():
+def check_supabase_connection(supabase: Client) -> bool:
+    """Cek koneksi ke Supabase"""
     try:
-        return create_client(
+        # Coba akses tabel sistem untuk verifikasi
+        supabase.table("any_table").select("*").execute()
+        return True
+    except Exception as e:
+        if "404" in str(e):
+            # Tabel tidak ada, tapi koneksi berhasil
+            return True
+        st.error(f"Supabase Error: {str(e)}")
+        return False
+
+def check_gemini_connection() -> bool:
+    """Cek koneksi ke Google Gemini"""
+    try:
+        genai.list_models()
+        return True
+    except Exception as e:
+        st.error(f"Gemini Error: {str(e)}")
+        return False
+
+# Inisialisasi dengan status visual
+with st.spinner("Menghubungkan ke layanan..."):
+    # Inisialisasi Supabase
+    try:
+        supabase_client = create_client(
             st.secrets["SUPABASE_URL"],
             st.secrets["SUPABASE_KEY"]
         )
     except Exception as e:
-        st.error(f"Gagal konek Supabase: {str(e)}")
-        return None
+        st.error(f"Gagal inisialisasi Supabase: {str(e)}")
+        st.stop()
 
-def initialize_gemini():
+    # Inisialisasi Gemini
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        return genai.GenerativeModel('gemini-2.0-flash')
+        gemini_model = genai.GenerativeModel('gemini-2.0-flash')
     except Exception as e:
-        st.error(f"Gagal inisialisasi Gemini: {str(e)}")
-        return None
+        st.error(f"Gagal konfigurasi Gemini: {str(e)}")
+        st.stop()
 
-def initialize_embeddings():
-    try:
-        return GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            task_type="retrieval_document"
-        )
-    except Exception as e:
-        st.error(f"Gagal load embeddings: {str(e)}")
-        return None
+    # Cek koneksi
+    supabase_connected = check_supabase_connection(supabase_client)
+    gemini_connected = check_gemini_connection()
 
-# Inisialisasi dengan status visual
-with st.spinner("Menginisialisasi layanan..."):
-    supabase_client = initialize_supabase()
-    gemini_model = initialize_gemini()
-    embeddings = initialize_embeddings()
-
-# Cek keberhasilan inisialisasi
-if not all([supabase_client, gemini_model, embeddings]):
-    st.warning("Beberapa layanan gagal diinisialisasi. Periksa konfigurasi.")
+# Tampilkan status koneksi
+if supabase_connected and gemini_connected:
+    st.success("✅ Koneksi berhasil!")
+    st.info("Supabase: Terhubung | Gemini: Tersedia model {}".format(
+        ', '.join([m.name for m in genai.list_models()])
+    ))
+elif supabase_connected:
+    st.warning("⚠️ Supabase terhubung, Gemini gagal")
     st.stop()
-
-st.success("Semua layanan berhasil diinisialisasi!")
+elif gemini_connected:
+    st.warning("⚠️ Gemini terhubung, Supabase gagal")
+    st.stop()
+else:
+    st.error("❌ Gagal terhubung ke semua layanan")
+    st.stop()
 
 # -------------------- Fungsi Utama --------------------
 def process_and_store_pdf(pdf_file):
+    """Ekstrak teks dari PDF, lakukan chunking, dan simpan ke Supabase"""
     try:
         # Ekstrak teks dari PDF
         pdf_reader = PdfReader(pdf_file)
@@ -77,6 +98,11 @@ def process_and_store_pdf(pdf_file):
         chunks = text_splitter.split_text(text)
         
         # Simpan ke Supabase
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            task_type="retrieval_document"
+        )
+        
         with st.spinner("Menyimpan ke database..."):
             SupabaseVectorStore.from_texts(
                 texts=chunks,
@@ -93,7 +119,13 @@ def process_and_store_pdf(pdf_file):
         return False, f"Error: {str(e)}\n{traceback.format_exc()}"
 
 def search_documents(query):
+    """Cari dokumen relevan dari Supabase"""
     try:
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            task_type="retrieval_document"
+        )
+        
         vector_store = SupabaseVectorStore(
             client=supabase_client,
             embedding=embeddings,
@@ -115,13 +147,14 @@ def search_documents(query):
         return []
 
 def generate_response(query, context=None):
+    """Buat respons menggunakan Gemini"""
     try:
         if context:
             prompt = f"""Context: {context}
             Pertanyaan: {query}
             
-            Berikan jawaban berdasarkan konteks. Jika tidak ada informasi relevan, 
-            beri tahu bahwa Anda tidak tahu."""
+            Berikan jawaban berdasarkan konteks di atas. Jika tidak ada informasi yang relevan, 
+            beri tahu pengguna bahwa Anda tidak tahu."""
         else:
             prompt = query
         
