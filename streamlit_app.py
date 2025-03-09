@@ -1,11 +1,12 @@
 import streamlit as st
-from supabase import create_client  # Pastikan package supabase terinstal
+from supabase import create_client
 from PyPDF2 import PdfReader
 import google.generativeai as genai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import SupabaseVectorStore  # Perbaiki import
+from langchain_community.vectorstores import SupabaseVectorStore
 from langchain.embeddings import HuggingFaceEmbeddings
 import os
+import traceback
 
 # Konfigurasi
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -41,15 +42,16 @@ def process_pdf(file):
 def store_in_supabase(chunks, filename):
     try:
         SupabaseVectorStore.from_texts(
-            chunks,
-            EMBEDDINGS,
+            texts=chunks,
+            embedding=EMBEDDINGS,
             client=supabase,
             table_name="documents",
-            metadata=[{"filename": filename} for _ in chunks]
+            metadatas=[{"filename": filename} for _ in chunks]  # Parameter diperbaiki
         )
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan ke Supabase: {str(e)}")
+        st.error(traceback.format_exc())  # Tampilkan detail error
         return False
 
 # Pencarian di Supabase
