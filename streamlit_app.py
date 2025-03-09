@@ -8,7 +8,9 @@ from langchain.embeddings import HuggingFaceEmbeddings
 import os
 import traceback
 
-# Konfigurasi
+# Konfigurasi Page Config harus di baris pertama setelah import
+st.set_page_config(page_title="PDF Chatbot", layout="wide")
+
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDINGS = HuggingFaceEmbeddings(model_name=MODEL_NAME)
 
@@ -91,9 +93,7 @@ def show_pdf_list():
         st.error(f"Error mengambil daftar PDF: {str(e)}")
         return []
 
-# Antarmuka Streamlit
-st.set_page_config(page_title="PDF Chatbot", layout="wide")
-
+# Inisialisasi session state setelah page config
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
