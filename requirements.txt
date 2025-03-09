@@ -1,8 +1,4 @@
 streamlit
-supabase
 PyPDF2
-google-generativeai
-langchain
-langchain-community
-langchain-google-genai
 sentence-transformers
+supabase
